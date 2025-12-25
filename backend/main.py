@@ -349,7 +349,7 @@ async def chat_with_ai(request: ChatRequest):
         
         # เรียก Gemini API ด้วย google-genai library ใหม่
         response = client.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-2.0-flash",
             contents=contents
         )
         
