@@ -1,6 +1,11 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
+from typing import Optional, List, Dict, Any
+import google.generativeai as genai
+import os
+import json
+import re
 
 app = FastAPI()
 
@@ -12,7 +17,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 1. กำหนดรูปแบบข้อมูลที่รับเข้ามา (Input Model)
+# ==================== CONFIG GEMINI ====================
+# ตั้งค่า API Key (ต้องตั้งใน Environment Variable บน Render)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+
+# ==================== MODELS ====================
 class BoxDesign(BaseModel):
     length: float  # cm
     width: float   # cm
@@ -20,41 +31,342 @@ class BoxDesign(BaseModel):
     flute_type: str # A, B, C, E
     weight: float   # น้ำหนักสินค้า (kg)
 
-# 2. ฐานข้อมูลสเปคกระดาษ (Mock Database)
+class ChatMessage(BaseModel):
+    role: str  # "user" หรือ "assistant"
+    content: str
+
+class ChatRequest(BaseModel):
+    message: str
+    conversation_history: List[ChatMessage] = []
+    current_requirements: Dict[str, Any] = {}
+
+class ChatResponse(BaseModel):
+    response: str
+    extracted_data: Dict[str, Any] = {}
+    current_step: int = 1
+    is_checkpoint: bool = False
+    show_quotation: bool = False
+    quotation_data: Dict[str, Any] = {}
+
+# ==================== FLUTE SPECS ====================
 FLUTE_SPECS = {
     "A": {"ect": 5.0, "thickness": 4.5},
     "B": {"ect": 4.0, "thickness": 2.5},
-    "C": {"ect": 4.2, "thickness": 3.6}, # มาตรฐานนิยม
+    "C": {"ect": 4.2, "thickness": 3.6},
     "E": {"ect": 3.0, "thickness": 1.5},
 }
 
-# เพิ่มตรงนี้: สร้างหน้าแรก (Home Page)
+# ==================== PRICING DATA ====================
+# ราคามาตรฐานสำหรับกล่อง 10x10x10 ซม.
+BASE_PRICES = {
+    "RSC": {
+        "ลูกฟูก": {"cost": 3.378, "paper_cost": 22, "thickness": 0.25, "density": 0.6, "labor": 1.2, "factor": 1.1},
+        "คราฟท์": {"cost": 1.596, "paper_cost": 30, "thickness": 0.025, "density": 0.8, "labor": 1.2, "factor": 1.1},
+    },
+    "Die-cut": {
+        "ลูกฟูก": {"cost": 3.57, "paper_cost": 22, "thickness": 0.25, "density": 0.6, "labor": 0.6, "factor": 1.5},
+        "จั่วปัง": {"cost": 8.6, "paper_cost": 40, "thickness": 0.25, "density": 0.9, "labor": 0.6, "factor": 1.5},
+        "อาร์ต": {"cost": 6.67, "paper_cost": 200, "thickness": 0.0375, "density": 0.9, "labor": 0.6, "factor": 1.5},
+        "กล่องแป้ง": {"cost": 1.93, "paper_cost": 40, "thickness": 0.04375, "density": 0.85, "labor": 0.6, "factor": 1.5},
+    }
+}
+
+# ราคา Inner และ Coating สำหรับกล่อง 10x10x10
+INNER_PRICES = {
+    "กระดาษฝอย": {"min": 1.5, "max": 2.5},
+    "บับเบิ้ล": {"min": 0.8, "max": 1.2},
+    "ถุงลม": {"min": 1.5, "max": 2.5},
+}
+
+COATING_PRICES = {
+    "AQ Coating": {"min": 0.48, "max": 1.2},
+    "PE Coating": {"min": 1.2, "max": 3.6},
+    "Wax Coating": {"min": 1.2, "max": 3.0},
+    "Bio Coating": {"min": 2.0, "max": 5.0},
+    "Water-based Food": {"min": 0.8, "max": 1.5},
+    "PE Food-grade": {"min": 1.2, "max": 2.0},
+    "PLA/Bio": {"min": 2.0, "max": 3.5},
+    "Grease-resistant": {"min": 1.5, "max": 3.0},
+}
+
+GLOSS_PRICES = {
+    "Gloss AQ": {"min": 0.6, "max": 1.2},
+    "UV Gloss": {"min": 1.2, "max": 2.4},
+    "OPP Gloss Film": {"min": 1.8, "max": 3.6},
+}
+
+MATTE_PRICES = {
+    "UV ด้าน": {"min": 4, "max": 8},
+    "ลามิเนตด้าน": {"min": 6, "max": 12},
+    "วานิชด้าน": {"min": 8, "max": 15},
+}
+
+EMBOSS_PRICES = {
+    "block_cost": {"min": 800, "max": 1500},
+    "per_box": 2,
+}
+
+FOIL_PRICES = {
+    "ฟอยล์ธรรมดา": {"block_min": 1000, "block_max": 2000, "per_box_min": 2, "per_box_max": 5},
+    "ฟอยล์ละเอียด": {"block_min": 2000, "block_max": 3500, "per_box_min": 5, "per_box_max": 10},
+    "ฟอยล์+นูน": {"block_min": 2500, "block_max": 5000, "per_box_min": 6, "per_box_max": 12},
+}
+
+# ==================== SYSTEM PROMPT ====================
+SYSTEM_PROMPT = """คุณคือ "ลูโม่" (Lumo) ผู้ช่วย AI วิศวกรบรรจุภัณฑ์ของ LumoPack 
+คุณมีหน้าที่ช่วยลูกค้าออกแบบกล่องบรรจุภัณฑ์ที่เหมาะสมกับความต้องการ
+
+## บุคลิก
+- พูดจาเป็นมิตร สุภาพ ใช้ภาษาไทยที่เข้าใจง่าย
+- ใช้ emoji เล็กน้อยเพื่อความน่ารัก แต่ไม่มากเกินไป
+- ตอบกระชับ ได้ใจความ ไม่ยืดเยื้อ
+- ถ้าลูกค้าตอบแบบอิสระ ให้พยายามเข้าใจและสกัดข้อมูลออกมา
+
+## ขั้นตอนการทำงาน (ทำตามลำดับ)
+
+### Phase 1: เก็บข้อมูลโครงสร้าง
+1. **ทักทาย** - แนะนำตัวและบอกว่าจะช่วยออกแบบกล่องให้
+2. **ประเภทสินค้า** (บังคับ) - ถามว่าจะใส่อะไร: สินค้าทั่วไป / Non-food / Food-grade / เครื่องสำอาง
+3. **ประเภทกล่อง** (บังคับ) - RSC (มาตรฐาน) หรือ Die-cut (เน้นโชว์แบรนด์)
+4. **Inner** (Optional สำหรับ Die-cut) - แผ่นกันกระแทก / เคลือบกันชื้น / Food-grade coating
+5. **ขนาดกล่อง** (บังคับ) - กว้าง x ยาว x สูง (ซม.)
+6. **จำนวนผลิต** (บังคับ) - ขั้นต่ำ 500 ชิ้น
+
+### Checkpoint 1: สรุปข้อมูลโครงสร้าง
+- แสดงข้อมูลที่ได้รับทั้งหมด
+- ขอยืนยันจากลูกค้า
+- ถ้าลูกค้าขอแก้ไข/เพิ่ม ให้ทำตามแล้วสรุปใหม่
+
+### Phase 2: เก็บข้อมูลการออกแบบ
+7. **Mood & Tone** (Optional) - สดใส / เรียบหรู / มินิมอล / สนุก / พรีเมียม
+8. **Logo & Font** (Optional) - มีโลโก้หรือไม่ ถ้ามีให้แนบมา และถามตำแหน่งที่ต้องการ
+9. **ลูกเล่นพิเศษ** (Optional) - เคลือบเงา / เคลือบด้าน / ปั๊มนูน / ปั๊มจม / ปั๊มฟอยล์
+
+### Checkpoint 2: สรุปข้อมูลการออกแบบ
+- แสดงข้อมูลทั้งหมด (โครงสร้าง + ออกแบบ)
+- ขอยืนยันจากลูกค้า
+
+### Phase 3: ออกใบเสนอราคา
+10. **แสดง Mockup** - บอกลักษณะกล่องที่จะได้
+11. **แสดงใบเสนอราคา** - แยกราคาตามรายการ + ราคารวม
+12. **ยืนยันคำสั่งซื้อ** - ถามยืนยัน
+13. **จบการสนทนา** - ขอบคุณลูกค้า
+
+## การตอบกลับ
+ทุกครั้งที่ตอบ ให้ส่ง JSON ในรูปแบบนี้ท้ายข้อความ (ซ่อนไว้ในแท็ก):
+<extracted_data>
+{
+  "product_type": "สินค้าทั่วไป/Non-food/Food-grade/เครื่องสำอาง",
+  "box_type": "RSC/Die-cut",
+  "inner": "ประเภท inner หรือ null",
+  "dimensions": {"width": 10, "length": 10, "height": 10},
+  "quantity": 500,
+  "mood_tone": "สไตล์ หรือ null",
+  "logo": {"has_logo": true/false, "position": "ตำแหน่ง"},
+  "special_features": ["รายการลูกเล่นพิเศษ"],
+  "current_step": 1-13,
+  "is_checkpoint": true/false,
+  "confirmed_structure": true/false,
+  "confirmed_design": true/false,
+  "confirmed_order": true/false
+}
+</extracted_data>
+
+## กฎสำคัญ
+- ถามทีละหัวข้อ ไม่ถามรวมกัน
+- ถ้าลูกค้าบอก "ไม่" หรือ "ข้าม" ในหัวข้อ Optional ให้ข้ามไปขั้นตอนถัดไป
+- ถ้าลูกค้าให้ข้อมูลหลายอย่างในคราวเดียว ให้สกัดข้อมูลทั้งหมดแล้วถามข้อที่ยังขาด
+- เมื่อถึง Checkpoint ต้องสรุปข้อมูลให้ครบถ้วนก่อนขอยืนยัน
+- ขนาดกล่องต้องเป็นตัวเลขในหน่วยเซนติเมตร
+"""
+
+# ==================== HELPER FUNCTIONS ====================
+def calculate_surface_area(width: float, length: float, height: float) -> float:
+    """คำนวณพื้นที่ผิวกล่อง"""
+    return 2 * ((width * length) + (width * height) + (length * height))
+
+def calculate_factor(width: float, length: float, height: float, box_type: str) -> float:
+    """คำนวณ Factor เทียบกับกล่อง 10x10x10"""
+    base_area = 600  # พื้นที่ผิวกล่อง 10x10x10
+    production_factor = 1.1 if box_type == "RSC" else 1.5
+    
+    base_area_with_factor = base_area * production_factor
+    new_area = calculate_surface_area(width, length, height) * production_factor
+    
+    return new_area / base_area_with_factor
+
+def calculate_box_price(width: float, length: float, height: float, 
+                        box_type: str, material: str, quantity: int) -> Dict[str, Any]:
+    """คำนวณราคากล่อง"""
+    factor = calculate_factor(width, length, height, box_type)
+    
+    # หาราคาพื้นฐาน
+    if box_type == "RSC":
+        base_price = BASE_PRICES["RSC"].get(material, BASE_PRICES["RSC"]["ลูกฟูก"])["cost"]
+    else:
+        base_price = BASE_PRICES["Die-cut"].get(material, BASE_PRICES["Die-cut"]["ลูกฟูก"])["cost"]
+    
+    price_per_box = base_price * factor
+    total_price = price_per_box * quantity
+    
+    return {
+        "factor": round(factor, 2),
+        "price_per_box": round(price_per_box, 2),
+        "total_price": round(total_price, 2),
+        "quantity": quantity
+    }
+
+def calculate_special_features_price(features: List[str], factor: float, quantity: int, 
+                                     has_existing_block: bool = False) -> Dict[str, Any]:
+    """คำนวณราคาลูกเล่นพิเศษ"""
+    total = 0
+    breakdown = []
+    
+    for feature in features:
+        if "เคลือบเงา" in feature or "Gloss" in feature:
+            for name, prices in GLOSS_PRICES.items():
+                if name.lower() in feature.lower():
+                    avg_price = (prices["min"] + prices["max"]) / 2 * factor
+                    breakdown.append({"item": name, "price_per_box": round(avg_price, 2)})
+                    total += avg_price * quantity
+                    break
+        
+        elif "เคลือบด้าน" in feature or "Matte" in feature:
+            for name, prices in MATTE_PRICES.items():
+                if name in feature:
+                    avg_price = (prices["min"] + prices["max"]) / 2 * factor
+                    breakdown.append({"item": name, "price_per_box": round(avg_price, 2)})
+                    total += avg_price * quantity
+                    break
+        
+        elif "ปั๊มนูน" in feature or "ปั๊มจม" in feature:
+            per_box = EMBOSS_PRICES["per_box"]
+            breakdown.append({"item": "ปั๊มนูน/จม", "price_per_box": per_box})
+            total += per_box * quantity
+            if not has_existing_block:
+                block_cost = (EMBOSS_PRICES["block_cost"]["min"] + EMBOSS_PRICES["block_cost"]["max"]) / 2
+                breakdown.append({"item": "ค่าบล็อกปั๊ม (ครั้งแรก)", "price": round(block_cost, 2)})
+                total += block_cost
+        
+        elif "ฟอยล์" in feature:
+            foil_type = "ฟอยล์ธรรมดา"
+            if "นูน" in feature:
+                foil_type = "ฟอยล์+นูน"
+            elif "ละเอียด" in feature or "ใหญ่" in feature:
+                foil_type = "ฟอยล์ละเอียด"
+            
+            prices = FOIL_PRICES[foil_type]
+            avg_per_box = (prices["per_box_min"] + prices["per_box_max"]) / 2
+            breakdown.append({"item": foil_type, "price_per_box": round(avg_per_box, 2)})
+            total += avg_per_box * quantity
+            
+            if not has_existing_block:
+                block_cost = (prices["block_min"] + prices["block_max"]) / 2
+                breakdown.append({"item": f"ค่าบล็อก{foil_type} (ครั้งแรก)", "price": round(block_cost, 2)})
+                total += block_cost
+    
+    return {
+        "breakdown": breakdown,
+        "total": round(total, 2)
+    }
+
+def extract_json_from_response(response_text: str) -> Dict[str, Any]:
+    """สกัด JSON จากข้อความตอบกลับของ AI"""
+    # หา JSON ใน <extracted_data> tag
+    pattern = r'<extracted_data>\s*(\{.*?\})\s*</extracted_data>'
+    match = re.search(pattern, response_text, re.DOTALL)
+    
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except json.JSONDecodeError:
+            pass
+    
+    return {}
+
+def clean_response(response_text: str) -> str:
+    """ลบ JSON tag ออกจากข้อความที่จะแสดงให้ผู้ใช้"""
+    pattern = r'<extracted_data>.*?</extracted_data>'
+    return re.sub(pattern, '', response_text, flags=re.DOTALL).strip()
+
+def generate_quotation(requirements: Dict[str, Any]) -> Dict[str, Any]:
+    """สร้างใบเสนอราคา"""
+    dimensions = requirements.get("dimensions", {"width": 10, "length": 10, "height": 10})
+    box_type = requirements.get("box_type", "RSC")
+    quantity = requirements.get("quantity", 500)
+    
+    # เลือกวัสดุตามประเภทสินค้า
+    product_type = requirements.get("product_type", "สินค้าทั่วไป")
+    if box_type == "RSC":
+        material = "ลูกฟูก"
+    else:
+        if product_type == "เครื่องสำอาง":
+            material = "อาร์ต"
+        elif product_type == "Food-grade":
+            material = "กล่องแป้ง"
+        else:
+            material = "ลูกฟูก"
+    
+    # คำนวณราคากล่อง
+    box_price = calculate_box_price(
+        dimensions["width"], dimensions["length"], dimensions["height"],
+        box_type, material, quantity
+    )
+    
+    # คำนวณราคาลูกเล่นพิเศษ
+    special_features = requirements.get("special_features", [])
+    features_price = calculate_special_features_price(
+        special_features, box_price["factor"], quantity
+    )
+    
+    # คำนวณราคา Inner
+    inner_price = 0
+    inner = requirements.get("inner")
+    if inner:
+        for name, prices in INNER_PRICES.items():
+            if name in inner:
+                avg_price = (prices["min"] + prices["max"]) / 2 * box_price["factor"]
+                inner_price = avg_price * quantity
+                break
+    
+    # รวมราคาทั้งหมด
+    total_price = box_price["total_price"] + features_price["total"] + inner_price
+    
+    return {
+        "box_type": box_type,
+        "material": material,
+        "dimensions": dimensions,
+        "quantity": quantity,
+        "inner": inner,
+        "special_features": special_features,
+        "pricing": {
+            "box_price_per_unit": box_price["price_per_box"],
+            "box_total": box_price["total_price"],
+            "inner_total": round(inner_price, 2),
+            "features_breakdown": features_price["breakdown"],
+            "features_total": features_price["total"],
+            "grand_total": round(total_price, 2),
+            "price_per_unit": round(total_price / quantity, 2)
+        }
+    }
+
+# ==================== ENDPOINTS ====================
 @app.get("/")
 def read_root():
     return {"message": "Hello! LumoPack Brain is ready 🧠"}
 
-# 3. API จุดรับคำนวณ (Endpoint)
 @app.post("/analyze")
 def analyze_box(design: BoxDesign):
-    # ดึงค่าสเปคกระดาษ
+    """วิเคราะห์ความแข็งแรงของกล่อง (McKee Formula)"""
     spec = FLUTE_SPECS.get(design.flute_type, FLUTE_SPECS["C"])
     
-    # คำนวณเส้นรอบรูป (Perimeter) เป็นนิ้ว (สูตร McKee ใช้นิ้ว)
-    # 1 cm = 0.3937 inch
     perimeter_inch = 2 * (design.length + design.width) * 0.3937
-    
-    # สูตร McKee (แบบย่อ): BCT = 5.87 * ECT * sqrt(Thickness * Perimeter)
-    # ผลลัพธ์หน่วยเป็น ปอนด์ (lbs)
     bct_lbs = 5.87 * spec["ect"] * ((spec["thickness"] * 0.03937 * perimeter_inch) ** 0.5)
-    
-    # แปลงเป็น กิโลกรัม (kg)
     max_load_kg = bct_lbs * 0.453592
     
-    # คำนวณ Safety Factor (วางซ้อน 5 ชั้น = รับน้ำหนัก 4 กล่อง)
     stack_load = design.weight * 4
     safety_score = max_load_kg / stack_load if stack_load > 0 else 100
 
-    # ประเมินผล
     status = "SAFE"
     if safety_score < 1.5:
         status = "DANGER"
@@ -68,3 +380,75 @@ def analyze_box(design: BoxDesign):
         "status": status,
         "recommendation": "Switch to Flute BC (Double Wall)" if status == "DANGER" else "Design is optimal (Safe)."
     }
+
+@app.post("/api/chat", response_model=ChatResponse)
+async def chat_with_ai(request: ChatRequest):
+    """Endpoint สำหรับ AI Chatbot"""
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
+    
+    try:
+        # สร้าง model
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # สร้าง conversation history
+        messages = [{"role": "user", "parts": [SYSTEM_PROMPT]}]
+        messages.append({"role": "model", "parts": ["เข้าใจแล้วครับ ผมพร้อมทำหน้าที่เป็นลูโม่ ผู้ช่วย AI วิศวกรบรรจุภัณฑ์ของ LumoPack แล้วครับ"]})
+        
+        # เพิ่ม conversation history
+        for msg in request.conversation_history:
+            role = "user" if msg.role == "user" else "model"
+            messages.append({"role": role, "parts": [msg.content]})
+        
+        # เพิ่ม context ของ requirements ปัจจุบัน
+        if request.current_requirements:
+            context = f"\n\n[ข้อมูลที่เก็บได้: {json.dumps(request.current_requirements, ensure_ascii=False)}]"
+            request.message += context
+        
+        # เพิ่มข้อความใหม่
+        messages.append({"role": "user", "parts": [request.message]})
+        
+        # เรียก Gemini API
+        chat = model.start_chat(history=messages[:-1])
+        response = chat.send_message(request.message)
+        
+        response_text = response.text
+        
+        # สกัดข้อมูลจากการตอบกลับ
+        extracted_data = extract_json_from_response(response_text)
+        clean_text = clean_response(response_text)
+        
+        # เตรียม response
+        result = ChatResponse(
+            response=clean_text,
+            extracted_data=extracted_data,
+            current_step=extracted_data.get("current_step", 1),
+            is_checkpoint=extracted_data.get("is_checkpoint", False),
+            show_quotation=False,
+            quotation_data={}
+        )
+        
+        # ถ้าถึงขั้นตอนออกใบเสนอราคา
+        if extracted_data.get("confirmed_design") and extracted_data.get("current_step", 0) >= 10:
+            quotation = generate_quotation(extracted_data)
+            result.show_quotation = True
+            result.quotation_data = quotation
+        
+        return result
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI Error: {str(e)}")
+
+@app.post("/api/calculate-price")
+async def calculate_price(requirements: Dict[str, Any]):
+    """คำนวณราคาโดยตรง"""
+    try:
+        quotation = generate_quotation(requirements)
+        return quotation
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Calculation Error: {str(e)}")
+
+# ==================== HEALTH CHECK ====================
+@app.get("/health")
+def health_check():
+    return {"status": "healthy", "gemini_configured": bool(GEMINI_API_KEY)}

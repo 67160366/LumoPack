@@ -3,7 +3,8 @@ import { Canvas, useFrame, useLoader } from '@react-three/fiber';
 import { OrbitControls, ContactShadows } from '@react-three/drei';
 import { TextureLoader } from 'three';
 import jsPDF from 'jspdf'; 
-import HeatmapBox from './HeatmapBox'; // ✅ Import มาแล้ว เยี่ยมมากครับ
+import HeatmapBox from './HeatmapBox';
+import Chatbot from './components/Chatbot'; // ✅ Import Chatbot
 
 // --- Component กล่องปกติ (PlainBox) ---
 function PlainBox({ width, height, depth, color }) {
@@ -40,6 +41,9 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [image, setImage] = useState(null);
 
+  // API URL - ใช้ environment variable หรือค่า default
+  const API_URL = import.meta.env.VITE_API_URL || 'https://lumopack.onrender.com';
+
   const handleChange = (e) => setFormData({ ...formData, [e.target.name]: e.target.value });
 
   const handleImageUpload = (e) => {
@@ -47,10 +51,23 @@ export default function App() {
     if (file) setImage(URL.createObjectURL(file));
   };
 
+  // ✅ ฟังก์ชันรับข้อมูลจาก Chatbot และอัปเดตกล่อง 3D
+  const handleChatbotUpdateDimensions = (dimensions) => {
+    setFormData(prev => ({
+      ...prev,
+      length: dimensions.length || prev.length,
+      width: dimensions.width || prev.width,
+      height: dimensions.height || prev.height
+    }));
+    
+    // Reset analysis เมื่อขนาดเปลี่ยน
+    setAnalysis(null);
+  };
+
   const handleAnalyze = async () => {
     setLoading(true);
     try {
-      const response = await fetch('https://lumopack.onrender.com/analyze', {
+      const response = await fetch(`${API_URL}/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -188,6 +205,22 @@ export default function App() {
             📄 ดาวน์โหลดใบเสนอราคา (PDF)
           </button>
         )}
+
+        {/* Chatbot Hint */}
+        <div style={{ 
+          marginTop: '20px', 
+          padding: '15px', 
+          background: 'linear-gradient(135deg, #667eea20 0%, #764ba220 100%)',
+          borderRadius: '10px',
+          border: '1px dashed #667eea'
+        }}>
+          <p style={{ margin: 0, fontSize: '14px', color: '#667eea' }}>
+            💬 <strong>ลองคุยกับ AI!</strong><br/>
+            <span style={{ fontSize: '12px', color: '#666' }}>
+              คลิกปุ่มแชทมุมขวาล่างเพื่อให้ AI ช่วยออกแบบกล่องและคำนวณราคา
+            </span>
+          </p>
+        </div>
       </div>
 
       {/* 3D Canvas */}
@@ -201,14 +234,11 @@ export default function App() {
           <spotLight position={[10, 10, 10]} angle={0.15} />
 
           <Suspense fallback={null}>
-            {/* 🔴 ส่วนที่ผมแก้ให้ครับ: เพิ่มตรรกะเลือก HeatmapBox */}
             {showTexture ? (
               <TexturedBox width={formData.length} height={formData.height} depth={formData.width} textureUrl={image} />
             ) : isDanger ? (
-              // ถ้าอันตราย -> ใช้ HeatmapBox (แดงไล่สี)
               <HeatmapBox width={formData.length} height={formData.height} depth={formData.width} />
             ) : (
-              // ถ้าปกติ -> ใช้ PlainBox (สีน้ำตาล)
               <PlainBox width={formData.length} height={formData.height} depth={formData.width} color="#d4a373" />
             )}
           </Suspense>
@@ -218,6 +248,12 @@ export default function App() {
           <gridHelper args={[20, 20]} />
         </Canvas>
       </div>
+
+      {/* ✅ Chatbot Component - Pop-up มุมขวาล่าง */}
+      <Chatbot 
+        onUpdateBoxDimensions={handleChatbotUpdateDimensions}
+        apiUrl={API_URL}
+      />
     </div>
   );
 }
