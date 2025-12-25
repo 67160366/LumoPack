@@ -42,7 +42,7 @@ export default function App() {
   const [image, setImage] = useState(null);
 
   // API URL - ใช้ environment variable หรือค่า default
-  const API_URL = import.meta.env.VITE_API_URL || 'https://lumopack.onrender.com';
+ const API_URL = import.meta.env.VITE_API_URL || 'https://lumopack-42mf.onrender.com';
 
   const handleChange = (e) => setFormData({ ...formData, [e.target.name]: e.target.value });
 
