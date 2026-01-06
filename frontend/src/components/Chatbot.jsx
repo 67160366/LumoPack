@@ -298,7 +298,7 @@ const CloseIcon = () => (
 );
 
 // ==================== MAIN COMPONENT ====================
-export default function Chatbot({ onUpdateBoxDimensions, apiUrl = 'https://lumopack.onrender.com' }) {
+export default function Chatbot({ onUpdateBoxDimensions, apiUrl = 'https://lumopack-42mf.onrender.com' }) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState('');
@@ -315,13 +315,10 @@ export default function Chatbot({ onUpdateBoxDimensions, apiUrl = 'https://lumop
   // Initial greeting when chat opens
   useEffect(() => {
     if (isOpen && messages.length === 0) {
-      setMessages([{
-        role: 'assistant',
-        content: 'สวัสดีครับ! 👋 ผมชื่อ "ลูโม่" ผู้ช่วย AI วิศวกรบรรจุภัณฑ์ของ LumoPack\n\nผมจะช่วยคุณออกแบบกล่องบรรจุภัณฑ์ที่เหมาะสมกับความต้องการครับ\n\nเริ่มต้นเลย... สินค้าที่จะใส่ในกล่องเป็นประเภทไหนครับ? 📦',
-        quickReplies: ['สินค้าทั่วไป', 'Non-food', 'Food-grade', 'เครื่องสำอาง']
-      }]);
+      // ส่งข้อความเริ่มต้นไปที่ API เพื่อให้ AI ทักทายและส่ง quick_replies มา
+      sendMessage('เริ่มต้น');
     }
-  }, [isOpen, messages.length]);
+  }, [isOpen]);
   
   // Inject CSS animations
   useEffect(() => {
@@ -335,8 +332,12 @@ export default function Chatbot({ onUpdateBoxDimensions, apiUrl = 'https://lumop
   const sendMessage = async (messageText) => {
     if (!messageText.trim()) return;
     
-    const userMessage = { role: 'user', content: messageText };
-    setMessages(prev => [...prev, userMessage]);
+    // ไม่แสดงข้อความ "เริ่มต้น" ใน UI
+    if (messageText !== 'เริ่มต้น') {
+      const userMessage = { role: 'user', content: messageText };
+      setMessages(prev => [...prev, userMessage]);
+    }
+    
     setInputValue('');
     setIsLoading(true);
     
@@ -377,12 +378,12 @@ export default function Chatbot({ onUpdateBoxDimensions, apiUrl = 'https://lumop
         setQuotation(data.quotation_data);
       }
       
-      // Add bot response
+      // Add bot response - ใช้ quick_replies จาก API response โดยตรง
       const botMessage = {
         role: 'assistant',
         content: data.response,
         quotation: data.show_quotation ? data.quotation_data : null,
-        quickReplies: getQuickReplies(data.current_step, data.extracted_data)
+        quickReplies: data.quick_replies || [] // ใช้ quick_replies จาก API
       };
       
       setMessages(prev => [...prev, botMessage]);
@@ -391,39 +392,12 @@ export default function Chatbot({ onUpdateBoxDimensions, apiUrl = 'https://lumop
       console.error('Chat error:', error);
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: 'ขออภัยครับ เกิดข้อผิดพลาดในการเชื่อมต่อ กรุณาลองใหม่อีกครั้งนะครับ 🙏'
+        content: 'ขออภัยครับ เกิดข้อผิดพลาดในการเชื่อมต่อ กรุณาลองใหม่อีกครั้งนะครับ 🙏',
+        quickReplies: []
       }]);
     }
     
     setIsLoading(false);
-  };
-  
-  // Get quick reply suggestions based on current step
-  const getQuickReplies = (step, data) => {
-    if (!step) return [];
-    
-    switch(step) {
-      case 1: // ประเภทสินค้า
-        return ['สินค้าทั่วไป', 'Non-food', 'Food-grade', 'เครื่องสำอาง'];
-      case 2: // ประเภทกล่อง
-        return ['RSC (มาตรฐาน)', 'Die-cut (เน้นโชว์แบรนด์)'];
-      case 3: // Inner
-        return ['ไม่ต้องการ', 'กระดาษฝอย', 'บับเบิ้ล', 'ถุงลม'];
-      case 6: // Checkpoint 1
-        return ['ยืนยัน ✓', 'ขอแก้ไข'];
-      case 7: // Mood & Tone
-        return ['ข้าม', 'มินิมอล', 'พรีเมียม', 'สดใส', 'เรียบหรู'];
-      case 8: // Logo
-        return ['ไม่มีโลโก้', 'มีโลโก้'];
-      case 9: // ลูกเล่นพิเศษ
-        return ['ไม่ต้องการ', 'เคลือบเงา', 'เคลือบด้าน', 'ปั๊มนูน', 'ปั๊มฟอยล์'];
-      case 10: // Checkpoint 2
-        return ['ยืนยัน ✓', 'ขอแก้ไข'];
-      case 12: // ยืนยันคำสั่งซื้อ
-        return ['ยืนยันคำสั่งซื้อ ✓', 'ขอแก้ไข Mockup'];
-      default:
-        return [];
-    }
   };
   
   // Handle quick reply click
@@ -551,7 +525,7 @@ export default function Chatbot({ onUpdateBoxDimensions, apiUrl = 'https://lumop
                 {/* Quotation Card */}
                 {msg.quotation && renderQuotation(msg.quotation)}
                 
-                {/* Quick Replies */}
+                {/* Quick Replies - ใช้จาก API response */}
                 {msg.role === 'assistant' && msg.quickReplies && msg.quickReplies.length > 0 && (
                   <div style={styles.quickReplies}>
                     {msg.quickReplies.map((reply, i) => (
