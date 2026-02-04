@@ -185,17 +185,28 @@ SYSTEM_PROMPT = """คุณคือ "ลูโม่" (Lumo) ผู้ช่�
 12. **ยืนยันคำสั่งซื้อ**
 13. **จบการสนทนา** - ขอบคุณ
 
-## การตอบกลับ
-ทุกครั้งต้องส่ง JSON ท้ายข้อความ:
+## การตอบกลับ (สำคัญมาก!)
+ทุกครั้งที่ตอบ ให้แบ่งเป็น 2 ส่วน:
+
+**ส่วนที่ 1: ข้อความถึงลูกค้า** (แสดงก่อน)
+- เขียนข้อความตอบลูกค้าตามปกติ
+- ห้ามใส่ JSON ในส่วนนี้
+
+**ส่วนที่ 2: JSON ข้อมูล** (ใส่ท้ายสุดเสมอ)
+- ต้องครอบด้วย <extracted_data> และ </extracted_data>
+- ห้ามมีข้อความอื่นปนใน JSON
+
+ตัวอย่าง:
+สวัสดีครับ! ผมลูโม่ ยินดีช่วยออกแบบกล่องให้ครับ 📦 สินค้าของคุณเป็นประเภทไหนครับ?
 
 <extracted_data>
 {
-  "product_type": "สินค้าทั่วไป/Non-food/Food-grade/เครื่องสำอาง หรือ null",
-  "box_type": "RSC/Die-cut หรือ null",
+  "product_type": null,
+  "box_type": null,
   "inner": {
-    "cushioning": "กระดาษฝอย/บับเบิ้ล/ถุงลม หรือ null",
-    "moisture_coating": "AQ Coating/PE Coating/Wax Coating/Bio Coating หรือ null",
-    "food_coating": "Water-based Food Coating/PE Food-grade Coating/PLA/Bio Coating/Grease-resistant Coating หรือ null"
+    "cushioning": null,
+    "moisture_coating": null,
+    "food_coating": null
   },
   "dimensions": {"width": null, "length": null, "height": null},
   "quantity": null,
@@ -207,12 +218,12 @@ SYSTEM_PROMPT = """คุณคือ "ลูโม่" (Lumo) ผู้ช่�
     "emboss": {"type": null, "has_block": false},
     "foil": {"type": null, "color": null, "has_block": false}
   },
-  "current_step": 1,
+  "current_step": 2,
   "is_checkpoint": false,
   "confirmed_structure": false,
   "confirmed_design": false,
   "confirmed_order": false,
-  "quick_replies": []
+  "quick_replies": ["สินค้าทั่วไป", "Non-food", "Food-grade", "เครื่องสำอาง"]
 }
 </extracted_data>
 
@@ -240,6 +251,8 @@ SYSTEM_PROMPT = """คุณคือ "ลูโม่" (Lumo) ผู้ช่�
 - "ไม่" หรือ "ข้าม" = ข้ามไปขั้นตอนถัดไป
 - ปั๊มนูน/ปั๊มฟอยล์ ต้องถามเรื่องบล็อก
 - จำนวนขั้นต่ำ 500 ชิ้น
+- **ห้ามแสดง JSON ในข้อความที่ส่งถึงลูกค้าเด็ดขาด!**
+- **JSON ต้องอยู่ใน <extracted_data> tag เท่านั้น**
 """
 
 # ==================== HELPER FUNCTIONS ====================
@@ -413,19 +426,68 @@ def generate_quotation(requirements: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 def extract_json_from_response(response_text: str) -> Dict[str, Any]:
-    pattern = r'<extracted_data>\s*(\{.*?\})\s*</extracted_data>'
-    match = re.search(pattern, response_text, re.DOTALL)
+    """สกัด JSON จากการตอบกลับของ AI - รองรับหลายรูปแบบ"""
     
+    # วิธีที่ 1: หา JSON ใน <extracted_data> tag
+    pattern = r'<extracted_data>\s*(\{[\s\S]*?\})\s*</extracted_data>'
+    match = re.search(pattern, response_text)
     if match:
         try:
             return json.loads(match.group(1))
         except json.JSONDecodeError:
             pass
+    
+    # วิธีที่ 2: หา JSON block ที่มี "product_type" หรือ "quick_replies"
+    json_pattern = r'\{[^{}]*"(?:product_type|quick_replies)"[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
+    matches = re.findall(json_pattern, response_text, re.DOTALL)
+    for m in matches:
+        try:
+            return json.loads(m)
+        except json.JSONDecodeError:
+            continue
+    
+    # วิธีที่ 3: หา JSON ที่ใหญ่ที่สุดในข้อความ
+    try:
+        start_idx = response_text.find('{')
+        if start_idx != -1:
+            # หา matching closing brace
+            depth = 0
+            for i, char in enumerate(response_text[start_idx:]):
+                if char == '{':
+                    depth += 1
+                elif char == '}':
+                    depth -= 1
+                    if depth == 0:
+                        json_str = response_text[start_idx:start_idx + i + 1]
+                        return json.loads(json_str)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    
     return {}
 
 def clean_response(response_text: str) -> str:
-    pattern = r'<extracted_data>.*?</extracted_data>'
-    return re.sub(pattern, '', response_text, flags=re.DOTALL).strip()
+    """ลบ JSON และ tag ออกจากข้อความ"""
+    
+    # ลบ <extracted_data> tag และเนื้อหาข้างใน
+    text = re.sub(r'<extracted_data>[\s\S]*?</extracted_data>', '', response_text)
+    
+    # ลบ JSON block ที่มี product_type หรือ quick_replies
+    text = re.sub(r'\{[^{}]*"(?:product_type|quick_replies)"[\s\S]*?\}(?:\s*\})*', '', text)
+    
+    # ลบ JSON ขนาดใหญ่ (มากกว่า 100 ตัวอักษร)
+    def remove_large_json(match):
+        if len(match.group(0)) > 100:
+            return ''
+        return match.group(0)
+    
+    # หา JSON blocks และลบถ้าใหญ่เกินไป
+    json_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
+    text = re.sub(json_pattern, remove_large_json, text)
+    
+    # ลบบรรทัดว่างที่เกินมา
+    text = re.sub(r'\n\s*\n', '\n\n', text)
+    
+    return text.strip()
 
 # ==================== ENDPOINTS ====================
 @app.get("/")
