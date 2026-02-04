@@ -480,7 +480,7 @@ async def chat_with_ai(request: ChatRequest):
         contents.append({"role": "user", "parts": [{"text": user_message}]})
         
         response = client.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-1.5-flash-latest",
             contents=contents
         )
         
