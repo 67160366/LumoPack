@@ -15,14 +15,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ==================== CONFIG GEMINI ====================
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+# ==================== CONFIG LLM (Groq - 14,400 req/day FREE!) ====================
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
-from google import genai
+from openai import OpenAI
 
 client = None
-if GEMINI_API_KEY:
-    client = genai.Client(api_key=GEMINI_API_KEY)
+if GROQ_API_KEY:
+    client = OpenAI(
+        api_key=GROQ_API_KEY,
+        base_url="https://api.groq.com/openai/v1"
+    )
 
 # ==================== MODELS ====================
 class BoxDesign(BaseModel):
@@ -431,7 +434,7 @@ def read_root():
 
 @app.get("/health")
 def health_check():
-    return {"status": "healthy", "gemini_configured": bool(GEMINI_API_KEY)}
+    return {"status": "healthy", "groq_configured": bool(GROQ_API_KEY)}
 
 @app.post("/analyze")
 def analyze_box(design: BoxDesign):
@@ -461,30 +464,37 @@ def analyze_box(design: BoxDesign):
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_with_ai(request: ChatRequest):
     if not client:
-        raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
+        raise HTTPException(status_code=500, detail="GROQ_API_KEY not configured")
     
     try:
-        contents = []
+        # สร้าง messages ใน OpenAI format
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT}
+        ]
         
-        contents.append({"role": "user", "parts": [{"text": SYSTEM_PROMPT}]})
-        contents.append({"role": "model", "parts": [{"text": "เข้าใจแล้วครับ พร้อมทำหน้าที่ลูโม่แล้วครับ"}]})
-        
+        # เพิ่ม conversation history
         for msg in request.conversation_history:
-            role = "user" if msg.role == "user" else "model"
-            contents.append({"role": role, "parts": [{"text": msg.content}]})
+            messages.append({
+                "role": msg.role,
+                "content": msg.content
+            })
         
+        # เพิ่มข้อความใหม่
         user_message = request.message
         if request.current_requirements:
             user_message += f"\n\n[ข้อมูลที่เก็บได้: {json.dumps(request.current_requirements, ensure_ascii=False)}]"
         
-        contents.append({"role": "user", "parts": [{"text": user_message}]})
+        messages.append({"role": "user", "content": user_message})
         
-        response = client.models.generate_content(
-            model="gemini-1.5-flash-latest",
-            contents=contents
+        # เรียก Groq API (OpenAI-compatible)
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=2048
         )
         
-        response_text = response.text
+        response_text = response.choices[0].message.content
         
         extracted_data = extract_json_from_response(response_text)
         clean_text = clean_response(response_text)
