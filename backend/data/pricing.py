@@ -1,27 +1,38 @@
 """
 ข้อมูลราคากล่องและวัสดุ
-ราคาเป็นบาท สำหรับกล่องขนาด 10x10x10 ซม.
-"""
 
-# ==================== ราคากล่องพื้นฐาน ====================
-BASE_BOX_PRICES = {
+ราคาพื้นฐานสำหรับกล่องขนาดมาตรฐาน 10x10x10 ซม.
+จะถูกคูณด้วย factor ตามขนาดจริง
+"""
+from typing import Dict, Any
+from dataclasses import dataclass
+
+
+# ==================== PRICE DATA STRUCTURES ====================
+@dataclass
+class PriceRange:
+    """ช่วงราคา min-max"""
+    min: float
+    max: float
+    
+    @property
+    def average(self) -> float:
+        """คำนวณราคาเฉลี่ย"""
+        return (self.min + self.max) / 2
+
+
+# ==================== BOX BASE PRICES ====================
+# ราคาเป็นบาท สำหรับกล่องขนาด 10x10x10 ซม.
+BASE_BOX_PRICES: Dict[str, Dict[str, Dict[str, Any]]] = {
     "RSC": {
         "ลูกฟูก": {
             "cost": 3.378,
             "paper_cost": 22,
-            "thickness": 0.25,
-            "density": 0.6,
-            "labor": 1.2,
-            "production_factor": 1.1,
             "description": "กล่องลูกฟูกมาตรฐาน"
         },
         "คราฟท์": {
             "cost": 1.596,
             "paper_cost": 30,
-            "thickness": 0.025,
-            "density": 0.8,
-            "labor": 1.2,
-            "production_factor": 1.1,
             "description": "กล่องกระดาษคราฟท์"
         },
     },
@@ -29,85 +40,67 @@ BASE_BOX_PRICES = {
         "ลูกฟูก": {
             "cost": 3.57,
             "paper_cost": 22,
-            "thickness": 0.25,
-            "density": 0.6,
-            "labor": 0.6,
-            "production_factor": 1.5,
             "description": "กล่องไดคัทลูกฟูก"
         },
         "จั่วปัง": {
             "cost": 8.6,
             "paper_cost": 40,
-            "thickness": 0.25,
-            "density": 0.9,
-            "labor": 0.6,
-            "production_factor": 1.5,
             "description": "กล่องจั่วปัง พรีเมียม"
         },
         "อาร์ต": {
             "cost": 6.67,
             "paper_cost": 200,
-            "thickness": 0.0375,
-            "density": 0.9,
-            "labor": 0.6,
-            "production_factor": 1.5,
             "description": "กล่องกระดาษอาร์ต พิมพ์สี่สี"
         },
         "กล่องแป้ง": {
             "cost": 1.93,
             "paper_cost": 40,
-            "thickness": 0.04375,
-            "density": 0.85,
-            "labor": 0.6,
-            "production_factor": 1.5,
             "description": "กล่องแป้ง Food-grade"
         },
     }
 }
 
-# ==================== ราคา Inner (แผ่นกันกระแทก) ====================
-# ราคาเป็นบาท/กก.
-INNER_PRICES = {
+
+# ==================== INNER PRICES ====================
+# ราคาเป็นบาท/กก. + น้ำหนักต่อกล่องมาตรฐาน
+INNER_PRICES: Dict[str, Dict[str, Any]] = {
     "กระดาษฝอย": {
         "min": 120,
         "max": 170,
-        "unit": "บาท/kg",
-        "weight_per_box": 0.02,  # kg ต่อกล่องขนาดมาตรฐาน
+        "weight_per_box": 0.02,
         "description": "กระดาษฝอยรอง กันกระแทก"
     },
     "บับเบิ้ล": {
         "min": 60,
         "max": 90,
-        "unit": "บาท/kg",
         "weight_per_box": 0.015,
         "description": "แผ่นบับเบิ้ลกันกระแทก"
     },
     "ถุงลม": {
         "min": 120,
         "max": 200,
-        "unit": "บาท/kg",
         "weight_per_box": 0.01,
         "description": "ถุงลมกันกระแทก"
     },
     "โฟม": {
         "min": 80,
         "max": 150,
-        "unit": "บาท/kg",
         "weight_per_box": 0.025,
         "description": "โฟมกันกระแทก"
     },
     "กระดาษลูกฟูก": {
         "min": 50,
         "max": 80,
-        "unit": "บาท/kg",
         "weight_per_box": 0.03,
         "description": "แผ่นกระดาษลูกฟูกรอง"
     }
 }
 
-# ==================== ราคาเคลือบ ====================
-COATING_PRICES = {
-    # เคลือบกันชื้น
+
+# ==================== COATING PRICES ====================
+# ราคาเป็นบาท/กล่องมาตรฐาน
+COATING_PRICES: Dict[str, Dict[str, Any]] = {
+    # กันชื้น (Moisture Resistant)
     "AQ Coating": {
         "min": 0.48,
         "max": 1.2,
@@ -127,7 +120,7 @@ COATING_PRICES = {
         "description": "Paraffin wax - กันชื้นดี"
     },
     
-    # Food-grade coating
+    # Food-grade
     "Food-grade Water-based": {
         "min": 0.8,
         "max": 1.5,
@@ -141,7 +134,7 @@ COATING_PRICES = {
         "description": "เคลือบ Food-grade PE"
     },
     
-    # เคลือบเงา
+    # เคลือบเงา (Gloss)
     "Gloss AQ": {
         "min": 0.6,
         "max": 1.2,
@@ -155,7 +148,7 @@ COATING_PRICES = {
         "description": "เคลือบเงา UV"
     },
     
-    # เคลือบด้าน
+    # เคลือบด้าน (Matte)
     "UV Matte": {
         "min": 4.0,
         "max": 8.0,
@@ -170,8 +163,9 @@ COATING_PRICES = {
     }
 }
 
-# ==================== ราคาปั๊ม ====================
-EMBOSS_PRICES = {
+
+# ==================== EMBOSS PRICES ====================
+EMBOSS_PRICES: Dict[str, Any] = {
     "block": {
         "min": 800,
         "max": 1500,
@@ -180,7 +174,9 @@ EMBOSS_PRICES = {
     "per_box": 2.0  # บาท/กล่อง
 }
 
-FOIL_PRICES = {
+
+# ==================== FOIL PRICES ====================
+FOIL_PRICES: Dict[str, Dict[str, Any]] = {
     "block": {
         "standard": {"min": 1000, "max": 2000},
         "detailed": {"min": 2000, "max": 3500},
@@ -193,8 +189,16 @@ FOIL_PRICES = {
     }
 }
 
-# ==================== ตัวคูณราคาตามลอน ====================
-FLUTE_PRICE_MULTIPLIER = {
+# Foil type keywords for categorization
+FOIL_TYPE_KEYWORDS = {
+    "emboss": ["นูน"],
+    "detailed": ["ละเอียด", "ใหญ่"]
+}
+
+
+# ==================== FLUTE PRICE MULTIPLIER ====================
+# ตัวคูณราคาตามลอน (ลอนหนากว่า = แพงกว่า)
+FLUTE_PRICE_MULTIPLIER: Dict[str, float] = {
     "E": 0.9,
     "B": 1.0,
     "C": 1.1,
@@ -202,3 +206,61 @@ FLUTE_PRICE_MULTIPLIER = {
     "EB": 1.3,
     "BC": 1.5
 }
+
+# Default multiplier for unknown flute types
+DEFAULT_FLUTE_MULTIPLIER = 1.0
+
+
+# ==================== HELPER FUNCTIONS ====================
+def get_base_price(box_type: str, material: str) -> float:
+    """
+    ดึงราคาพื้นฐานของกล่อง
+    
+    Args:
+        box_type: ประเภทกล่อง (RSC/Die-cut)
+        material: วัสดุ
+    
+    Returns:
+        ราคาพื้นฐาน (บาท)
+    """
+    box_prices = BASE_BOX_PRICES.get(box_type, BASE_BOX_PRICES["RSC"])
+    material_data = box_prices.get(material)
+    
+    if material_data:
+        return material_data["cost"]
+    
+    # Fallback: หา material แรกที่มี
+    first_material = next(iter(box_prices.values()), {"cost": 3.5})
+    return first_material["cost"]
+
+
+def get_flute_multiplier(flute_type: str) -> float:
+    """ดึงตัวคูณราคาตามลอน"""
+    return FLUTE_PRICE_MULTIPLIER.get(flute_type, DEFAULT_FLUTE_MULTIPLIER)
+
+
+def get_inner_price_data(inner_type: str) -> Dict[str, Any]:
+    """ดึงข้อมูลราคา Inner"""
+    return INNER_PRICES.get(inner_type, {})
+
+
+def get_coating_price_data(coating_type: str) -> Dict[str, Any]:
+    """ดึงข้อมูลราคาเคลือบ"""
+    return COATING_PRICES.get(coating_type, {})
+
+
+def categorize_foil_type(foil_type: str) -> str:
+    """
+    จำแนกประเภทฟอยล์จากชื่อ
+    
+    Returns:
+        "emboss_foil" | "detailed" | "standard"
+    """
+    if not foil_type:
+        return "standard"
+    
+    for category, keywords in FOIL_TYPE_KEYWORDS.items():
+        if any(keyword in foil_type for keyword in keywords):
+            return "emboss_foil" if category == "emboss" else "detailed"
+    
+    return "standard"

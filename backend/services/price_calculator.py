@@ -1,44 +1,100 @@
 """
 Price Calculator - คำนวณราคากล่อง
+
+คำนวณราคาจาก:
+- ขนาดกล่อง (พื้นที่ผิว)
+- ประเภทกล่อง (RSC / Die-cut)
+- วัสดุ
+- ลอน
+- Options (Inner, เคลือบ, ปั๊ม)
 """
 from typing import Dict, Any, Optional
+from dataclasses import dataclass
+
+from config import BoxConfig, PricingConfig
 from data.pricing import (
-    BASE_BOX_PRICES, 
-    INNER_PRICES, 
+    BASE_BOX_PRICES,
+    INNER_PRICES,
     COATING_PRICES,
     EMBOSS_PRICES,
     FOIL_PRICES,
-    FLUTE_PRICE_MULTIPLIER
+    get_base_price,
+    get_flute_multiplier,
+    categorize_foil_type
 )
 from data.materials import get_material_recommendation
+from utils.helpers import calculate_surface_area, calculate_average_price, safe_divide
 
 
+# ==================== DATA CLASSES ====================
+@dataclass
+class BoxPriceResult:
+    """ผลการคำนวณราคากล่อง"""
+    box_type: str
+    material: str
+    flute_type: str
+    quantity: int
+    factor: float
+    price_per_box: float
+    total_price: float
+
+
+@dataclass
+class QuotationResult:
+    """ใบเสนอราคา"""
+    box_total: float
+    options_total: float
+    grand_total: float
+    price_per_unit: float
+
+
+# ==================== PRICE CALCULATOR CLASS ====================
 class PriceCalculator:
-    """คลาสสำหรับคำนวณราคากล่อง"""
+    """
+    คลาสสำหรับคำนวณราคากล่อง
     
-    BASE_SURFACE_AREA = 600  # พื้นที่ผิวกล่อง 10x10x10 cm
+    ราคาคำนวณจาก:
+    1. พื้นที่ผิวกล่องเทียบกับกล่องมาตรฐาน (factor)
+    2. ราคาวัสดุพื้นฐาน
+    3. ตัวคูณตามลอน
+    4. จำนวนสั่งผลิต
     
-    def calculate_surface_area(
-        self,
-        width: float,
-        length: float,
-        height: float
-    ) -> float:
-        """คำนวณพื้นที่ผิวกล่อง 6 ด้าน"""
-        return 2 * ((width * length) + (width * height) + (length * height))
+    Example:
+        calculator = PriceCalculator()
+        result = calculator.calculate_total(
+            box_design={"recommended_size_cm": {"width": 10, "length": 10, "height": 5}},
+            quantity=1000
+        )
+    """
     
-    def calculate_factor(
+    def __init__(self):
+        self.base_surface_area = PricingConfig.BASE_SURFACE_AREA
+    
+    # ==================== PUBLIC METHODS ====================
+    def calculate_size_factor(
         self,
         width: float,
         length: float,
         height: float,
         box_type: str = "RSC"
     ) -> float:
-        """คำนวณ Factor เทียบกับกล่องมาตรฐาน 10x10x10"""
-        production_factor = 1.1 if box_type == "RSC" else 1.5
-        base_area_with_factor = self.BASE_SURFACE_AREA * production_factor
-        new_area = self.calculate_surface_area(width, length, height) * production_factor
-        return max(1.0, new_area / base_area_with_factor)
+        """
+        คำนวณ Factor เทียบกับกล่องมาตรฐาน 10x10x10
+        
+        Args:
+            width, length, height: ขนาดกล่อง (cm)
+            box_type: ประเภทกล่อง
+        
+        Returns:
+            Factor (>= 1.0)
+        """
+        production_factor = self._get_production_factor(box_type)
+        base_area_adjusted = self.base_surface_area * production_factor
+        
+        new_area = calculate_surface_area(width, length, height)
+        new_area_adjusted = new_area * production_factor
+        
+        return max(PricingConfig.MIN_FACTOR, new_area_adjusted / base_area_adjusted)
     
     def calculate_box_price(
         self,
@@ -63,17 +119,10 @@ class PriceCalculator:
         Returns:
             รายละเอียดราคา
         """
-        factor = self.calculate_factor(width, length, height, box_type)
+        factor = self.calculate_size_factor(width, length, height, box_type)
+        base_price = get_base_price(box_type, material)
+        flute_multiplier = get_flute_multiplier(flute_type)
         
-        # ดึงราคาพื้นฐาน
-        box_prices = BASE_BOX_PRICES.get(box_type, BASE_BOX_PRICES["RSC"])
-        material_data = box_prices.get(material, box_prices.get("ลูกฟูก", {"cost": 3.5}))
-        base_price = material_data["cost"]
-        
-        # ปรับราคาตามลอน
-        flute_multiplier = FLUTE_PRICE_MULTIPLIER.get(flute_type, 1.0)
-        
-        # คำนวณราคา
         price_per_box = base_price * factor * flute_multiplier
         total_price = price_per_box * quantity
         
@@ -81,11 +130,7 @@ class PriceCalculator:
             "box_type": box_type,
             "material": material,
             "flute_type": flute_type,
-            "dimensions": {
-                "width": width,
-                "length": length,
-                "height": height
-            },
+            "dimensions": {"width": width, "length": length, "height": height},
             "quantity": quantity,
             "factor": round(factor, 2),
             "flute_multiplier": flute_multiplier,
@@ -95,38 +140,38 @@ class PriceCalculator:
     
     def calculate_inner_price(
         self,
-        inner_type: str,
+        inner_type: Optional[str],
         factor: float,
         quantity: int
     ) -> Dict[str, Any]:
         """คำนวณราคา Inner (แผ่นกันกระแทก)"""
         if not inner_type or inner_type not in INNER_PRICES:
-            return {"type": None, "total": 0}
+            return self._empty_inner_result()
         
         price_data = INNER_PRICES[inner_type]
-        avg_price_per_kg = (price_data["min"] + price_data["max"]) / 2
-        weight = price_data["weight_per_box"] * factor
-        total = avg_price_per_kg * weight * quantity
+        avg_price_per_kg = calculate_average_price(price_data)
+        weight_per_box = price_data["weight_per_box"] * factor
+        total = avg_price_per_kg * weight_per_box * quantity
         
         return {
             "type": inner_type,
             "price_per_kg": avg_price_per_kg,
-            "weight_per_box": round(weight, 4),
+            "weight_per_box": round(weight_per_box, 4),
             "total": round(total, 2)
         }
     
     def calculate_coating_price(
         self,
-        coating_type: str,
+        coating_type: Optional[str],
         factor: float,
         quantity: int
     ) -> Dict[str, Any]:
         """คำนวณราคาเคลือบ"""
         if not coating_type or coating_type not in COATING_PRICES:
-            return {"type": None, "total": 0}
+            return self._empty_coating_result()
         
         price_data = COATING_PRICES[coating_type]
-        avg_price = (price_data["min"] + price_data["max"]) / 2 * factor
+        avg_price = calculate_average_price(price_data) * factor
         total = avg_price * quantity
         
         return {
@@ -143,19 +188,16 @@ class PriceCalculator:
     ) -> Dict[str, Any]:
         """คำนวณราคาปั๊มนูน/ปั๊มจม"""
         if not has_emboss:
-            return {"enabled": False, "total": 0}
+            return self._empty_emboss_result()
         
-        block_cost = 0
-        if not has_existing_block:
-            block_cost = (EMBOSS_PRICES["block"]["min"] + EMBOSS_PRICES["block"]["max"]) / 2
-        
-        per_box_cost = EMBOSS_PRICES["per_box"] * quantity
-        total = block_cost + per_box_cost
+        block_cost = self._calculate_emboss_block_cost(has_existing_block)
+        per_box_total = EMBOSS_PRICES["per_box"] * quantity
+        total = block_cost + per_box_total
         
         return {
             "enabled": True,
             "block_cost": block_cost,
-            "per_box_cost": round(per_box_cost, 2),
+            "per_box_cost": round(per_box_total, 2),
             "total": round(total, 2)
         }
     
@@ -167,36 +209,18 @@ class PriceCalculator:
     ) -> Dict[str, Any]:
         """คำนวณราคาปั๊มฟอยล์"""
         if not foil_type:
-            return {"enabled": False, "total": 0}
+            return self._empty_foil_result()
         
-        # ค่าบล็อก
-        block_cost = 0
-        if not has_existing_block:
-            if "นูน" in foil_type:
-                block_data = FOIL_PRICES["block"]["emboss_foil"]
-            elif "ละเอียด" in foil_type or "ใหญ่" in foil_type:
-                block_data = FOIL_PRICES["block"]["detailed"]
-            else:
-                block_data = FOIL_PRICES["block"]["standard"]
-            block_cost = (block_data["min"] + block_data["max"]) / 2
-        
-        # ค่าปั๊มต่อกล่อง
-        if "นูน" in foil_type:
-            per_box_data = FOIL_PRICES["per_box"]["emboss_foil"]
-        elif "ละเอียด" in foil_type or "ใหญ่" in foil_type:
-            per_box_data = FOIL_PRICES["per_box"]["large"]
-        else:
-            per_box_data = FOIL_PRICES["per_box"]["1_color"]
-        
-        avg_per_box = (per_box_data["min"] + per_box_data["max"]) / 2
-        per_box_cost = avg_per_box * quantity
-        total = block_cost + per_box_cost
+        category = categorize_foil_type(foil_type)
+        block_cost = self._calculate_foil_block_cost(category, has_existing_block)
+        per_box_total = self._calculate_foil_per_box_cost(category, quantity)
+        total = block_cost + per_box_total
         
         return {
             "enabled": True,
             "type": foil_type,
             "block_cost": block_cost,
-            "per_box_cost": round(per_box_cost, 2),
+            "per_box_cost": round(per_box_total, 2),
             "total": round(total, 2)
         }
     
@@ -229,10 +253,13 @@ class PriceCalculator:
             has_foil_block: มีบล็อกฟอยล์แล้วหรือไม่
         
         Returns:
-            ใบเสนอราคา
+            ใบเสนอราคาทั้งหมด
         """
-        # ดึงข้อมูลขนาดกล่อง
-        dims = box_design.get("recommended_size_cm", {"width": 10, "length": 10, "height": 10})
+        # Validate quantity
+        quantity = max(quantity, 1)  # ป้องกัน division by zero
+        
+        # ดึงข้อมูลจาก box_design
+        dims = self._extract_dimensions(box_design)
         flute = box_design.get("flute", "B")
         
         # เลือกวัสดุตามประเภทสินค้า
@@ -245,22 +272,103 @@ class PriceCalculator:
             box_type, material, flute, quantity
         )
         
-        factor = box_price["factor"]
-        
         # คำนวณราคา options
-        inner_price = self.calculate_inner_price(inner_type, factor, quantity)
-        coating_price = self.calculate_coating_price(coating_type, factor, quantity)
-        emboss_price = self.calculate_emboss_price(has_emboss, has_emboss_block, quantity)
-        foil_price = self.calculate_foil_price(foil_type, has_foil_block, quantity)
+        factor = box_price["factor"]
+        prices = self._calculate_all_options(
+            factor, quantity, inner_type, coating_type,
+            has_emboss, has_emboss_block, foil_type, has_foil_block
+        )
         
         # รวมราคา
-        grand_total = (
-            box_price["total_price"] +
-            inner_price["total"] +
-            coating_price["total"] +
-            emboss_price["total"] +
-            foil_price["total"]
+        return self._build_quotation(
+            box_type, material, flute, dims, quantity,
+            box_price, prices
         )
+    
+    # ==================== PRIVATE METHODS ====================
+    def _get_production_factor(self, box_type: str) -> float:
+        """ดึง production factor ตามประเภทกล่อง"""
+        if box_type == "RSC":
+            return PricingConfig.RSC_PRODUCTION_FACTOR
+        return PricingConfig.DIECUT_PRODUCTION_FACTOR
+    
+    def _extract_dimensions(self, box_design: Dict[str, Any]) -> Dict[str, float]:
+        """ดึง dimensions จาก box_design"""
+        default_dims = {
+            "width": BoxConfig.DEFAULT_WIDTH,
+            "length": BoxConfig.DEFAULT_LENGTH,
+            "height": BoxConfig.DEFAULT_HEIGHT
+        }
+        return box_design.get("recommended_size_cm", default_dims)
+    
+    def _calculate_emboss_block_cost(self, has_existing_block: bool) -> float:
+        """คำนวณค่าบล็อกปั๊มนูน"""
+        if has_existing_block:
+            return 0.0
+        return calculate_average_price(EMBOSS_PRICES["block"])
+    
+    def _calculate_foil_block_cost(
+        self, 
+        category: str, 
+        has_existing_block: bool
+    ) -> float:
+        """คำนวณค่าบล็อกฟอยล์"""
+        if has_existing_block:
+            return 0.0
+        
+        block_prices = FOIL_PRICES["block"]
+        price_data = block_prices.get(category, block_prices["standard"])
+        return calculate_average_price(price_data)
+    
+    def _calculate_foil_per_box_cost(self, category: str, quantity: int) -> float:
+        """คำนวณค่าปั๊มฟอยล์ต่อกล่อง"""
+        per_box_prices = FOIL_PRICES["per_box"]
+        
+        # Map category to price key
+        price_key_map = {
+            "emboss_foil": "emboss_foil",
+            "detailed": "large",
+            "standard": "1_color"
+        }
+        price_key = price_key_map.get(category, "1_color")
+        price_data = per_box_prices.get(price_key, per_box_prices["1_color"])
+        
+        avg_per_box = calculate_average_price(price_data)
+        return avg_per_box * quantity
+    
+    def _calculate_all_options(
+        self,
+        factor: float,
+        quantity: int,
+        inner_type: Optional[str],
+        coating_type: Optional[str],
+        has_emboss: bool,
+        has_emboss_block: bool,
+        foil_type: Optional[str],
+        has_foil_block: bool
+    ) -> Dict[str, Dict[str, Any]]:
+        """คำนวณราคา options ทั้งหมด"""
+        return {
+            "inner": self.calculate_inner_price(inner_type, factor, quantity),
+            "coating": self.calculate_coating_price(coating_type, factor, quantity),
+            "emboss": self.calculate_emboss_price(has_emboss, has_emboss_block, quantity),
+            "foil": self.calculate_foil_price(foil_type, has_foil_block, quantity)
+        }
+    
+    def _build_quotation(
+        self,
+        box_type: str,
+        material: str,
+        flute: str,
+        dims: Dict[str, float],
+        quantity: int,
+        box_price: Dict[str, Any],
+        prices: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """สร้างใบเสนอราคา"""
+        options_total = sum(p.get("total", 0) for p in prices.values())
+        grand_total = box_price["total_price"] + options_total
+        price_per_unit = safe_divide(grand_total, quantity, default=grand_total)
         
         return {
             "summary": {
@@ -272,20 +380,29 @@ class PriceCalculator:
             },
             "pricing": {
                 "box": box_price,
-                "inner": inner_price,
-                "coating": coating_price,
-                "emboss": emboss_price,
-                "foil": foil_price
+                **prices
             },
             "totals": {
                 "box_total": box_price["total_price"],
-                "options_total": round(
-                    inner_price["total"] + 
-                    coating_price["total"] + 
-                    emboss_price["total"] + 
-                    foil_price["total"], 2
-                ),
+                "options_total": round(options_total, 2),
                 "grand_total": round(grand_total, 2),
-                "price_per_unit": round(grand_total / quantity, 2)
+                "price_per_unit": round(price_per_unit, 2)
             }
         }
+    
+    # ==================== EMPTY RESULTS ====================
+    @staticmethod
+    def _empty_inner_result() -> Dict[str, Any]:
+        return {"type": None, "total": 0}
+    
+    @staticmethod
+    def _empty_coating_result() -> Dict[str, Any]:
+        return {"type": None, "total": 0}
+    
+    @staticmethod
+    def _empty_emboss_result() -> Dict[str, Any]:
+        return {"enabled": False, "total": 0}
+    
+    @staticmethod
+    def _empty_foil_result() -> Dict[str, Any]:
+        return {"enabled": False, "total": 0}

@@ -1,5 +1,5 @@
 """
-Prompts module - System prompts for AI
+Prompts module
 """
 from .system_prompt import SYSTEM_PROMPT
 

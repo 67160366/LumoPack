@@ -1,9 +1,27 @@
 """
 ข้อมูลการเลือกวัสดุตามประเภทสินค้า
-"""
 
-# ==================== วัสดุที่แนะนำตามประเภทสินค้า ====================
-PRODUCT_TYPE_MATERIALS = {
+จับคู่ระหว่าง:
+- ประเภทสินค้า → วัสดุที่เหมาะสม
+- น้ำหนักสินค้า → ลอนที่แนะนำ
+"""
+from typing import Dict, Any, List, Optional
+from dataclasses import dataclass
+
+
+# ==================== DATA STRUCTURES ====================
+@dataclass
+class MaterialRecommendation:
+    """คำแนะนำวัสดุ"""
+    material: str
+    recommended_flutes: List[str]
+    inner_options: Optional[List[str]]
+    coating_options: Optional[List[str]]
+    reason: str
+
+
+# ==================== PRODUCT TYPE -> MATERIALS ====================
+PRODUCT_TYPE_MATERIALS: Dict[str, Dict[str, Any]] = {
     "สินค้าทั่วไป": {
         "RSC": "ลูกฟูก",
         "Die-cut": "ลูกฟูก",
@@ -54,38 +72,127 @@ PRODUCT_TYPE_MATERIALS = {
     }
 }
 
-# ==================== แนะนำลอนตามน้ำหนัก ====================
-WEIGHT_FLUTE_RECOMMENDATION = [
-    {"max_weight": 1, "flute": "E", "reason": "สินค้าเบามาก"},
-    {"max_weight": 3, "flute": "E", "reason": "สินค้าเบา"},
-    {"max_weight": 10, "flute": "B", "reason": "สินค้าน้ำหนักปานกลาง"},
-    {"max_weight": 20, "flute": "C", "reason": "สินค้าน้ำหนักปานกลาง-หนัก"},
-    {"max_weight": 30, "flute": "A", "reason": "สินค้าหนัก"},
-    {"max_weight": float('inf'), "flute": "BC", "reason": "สินค้าหนักมาก"}
+# Default product type for fallback
+DEFAULT_PRODUCT_TYPE = "สินค้าทั่วไป"
+
+
+# ==================== WEIGHT -> FLUTE RECOMMENDATION ====================
+WEIGHT_FLUTE_THRESHOLDS = [
+    {"max_weight_kg": 1, "flute": "E", "reason": "สินค้าเบามาก"},
+    {"max_weight_kg": 3, "flute": "E", "reason": "สินค้าเบา"},
+    {"max_weight_kg": 10, "flute": "B", "reason": "สินค้าน้ำหนักปานกลาง"},
+    {"max_weight_kg": 20, "flute": "C", "reason": "สินค้าน้ำหนักปานกลาง-หนัก"},
+    {"max_weight_kg": 30, "flute": "A", "reason": "สินค้าหนัก"},
+    {"max_weight_kg": float('inf'), "flute": "BC", "reason": "สินค้าหนักมาก"}
 ]
 
-def get_recommended_flute_by_weight(weight_kg: float) -> dict:
-    """หาลอนที่แนะนำจากน้ำหนัก"""
-    for rec in WEIGHT_FLUTE_RECOMMENDATION:
-        if weight_kg <= rec["max_weight"]:
-            return {"flute": rec["flute"], "reason": rec["reason"]}
+
+# ==================== INNER RECOMMENDATIONS ====================
+INNER_RECOMMENDATIONS = {
+    "fragile": "บับเบิ้ล หรือ โฟม",
+    "food": "กระดาษรองอาหาร (Food-grade)",
+    "electronics": "โฟมกันกระแทก",
+    "cosmetics": "กระดาษฝอยสี หรือ โฟม"
+}
+
+
+# ==================== HELPER FUNCTIONS ====================
+def get_material_for_product(
+    product_type: str, 
+    box_type: str = "RSC"
+) -> str:
+    """
+    ดึงวัสดุที่แนะนำตามประเภทสินค้า
+    
+    Args:
+        product_type: ประเภทสินค้า
+        box_type: ประเภทกล่อง (RSC/Die-cut)
+    
+    Returns:
+        ชื่อวัสดุที่แนะนำ
+    """
+    product_info = PRODUCT_TYPE_MATERIALS.get(
+        product_type, 
+        PRODUCT_TYPE_MATERIALS[DEFAULT_PRODUCT_TYPE]
+    )
+    return product_info.get(box_type, "ลูกฟูก")
+
+
+def get_material_recommendation(
+    product_type: str, 
+    box_type: str = "RSC"
+) -> Dict[str, Any]:
+    """
+    ดึงคำแนะนำวัสดุทั้งหมดตามประเภทสินค้า
+    
+    Args:
+        product_type: ประเภทสินค้า
+        box_type: ประเภทกล่อง
+    
+    Returns:
+        dict คำแนะนำทั้งหมด
+    """
+    product_info = PRODUCT_TYPE_MATERIALS.get(
+        product_type, 
+        PRODUCT_TYPE_MATERIALS[DEFAULT_PRODUCT_TYPE]
+    )
+    
+    return {
+        "material": product_info.get(box_type, "ลูกฟูก"),
+        "recommended_flute": product_info.get("recommended_flute", ["C"]),
+        "inner": product_info.get("inner"),
+        "coating": product_info.get("coating"),
+        "reason": product_info.get("reason", "วัสดุมาตรฐาน")
+    }
+
+
+def get_flute_by_weight(weight_kg: float) -> Dict[str, str]:
+    """
+    หาลอนที่แนะนำจากน้ำหนัก
+    
+    Args:
+        weight_kg: น้ำหนักสินค้า (kg)
+    
+    Returns:
+        {"flute": str, "reason": str}
+    """
+    for threshold in WEIGHT_FLUTE_THRESHOLDS:
+        if weight_kg <= threshold["max_weight_kg"]:
+            return {
+                "flute": threshold["flute"],
+                "reason": threshold["reason"]
+            }
+    
+    # Fallback (shouldn't reach here due to inf)
     return {"flute": "BC", "reason": "สินค้าหนักมาก"}
 
-def get_material_recommendation(product_type: str, box_type: str = "RSC") -> dict:
-    """หาวัสดุที่แนะนำตามประเภทสินค้า"""
-    if product_type in PRODUCT_TYPE_MATERIALS:
-        info = PRODUCT_TYPE_MATERIALS[product_type]
-        return {
-            "material": info.get(box_type, "ลูกฟูก"),
-            "recommended_flute": info.get("recommended_flute", ["C"]),
-            "inner": info.get("inner"),
-            "coating": info.get("coating"),
-            "reason": info.get("reason")
-        }
-    return {
-        "material": "ลูกฟูก",
-        "recommended_flute": ["C"],
-        "inner": None,
-        "coating": None,
-        "reason": "วัสดุมาตรฐาน"
-    }
+
+def get_inner_recommendation(
+    is_fragile: bool = False, 
+    is_food: bool = False
+) -> Optional[str]:
+    """
+    ดึงคำแนะนำ Inner ตามคุณสมบัติสินค้า
+    
+    Args:
+        is_fragile: สินค้าแตกง่ายหรือไม่
+        is_food: เป็นอาหารหรือไม่
+    
+    Returns:
+        คำแนะนำ Inner หรือ None
+    """
+    if is_fragile:
+        return INNER_RECOMMENDATIONS["fragile"]
+    elif is_food:
+        return INNER_RECOMMENDATIONS["food"]
+    return None
+
+
+def is_valid_product_type(product_type: str) -> bool:
+    """ตรวจสอบว่าเป็นประเภทสินค้าที่รองรับหรือไม่"""
+    return product_type in PRODUCT_TYPE_MATERIALS
+
+
+def get_all_product_types() -> List[str]:
+    """ดึงประเภทสินค้าทั้งหมด"""
+    return list(PRODUCT_TYPE_MATERIALS.keys())
