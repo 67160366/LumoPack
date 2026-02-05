@@ -30,6 +30,19 @@ LARGE_JSON_PATTERN = re.compile(
     r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
 )
 
+# Pattern สำหรับลบข้อความ internal ที่ไม่ควรแสดงลูกค้า
+INTERNAL_MESSAGE_PATTERNS = [
+    re.compile(r'\*\*ตั้งค่า\s*ready_to_design\s*=\s*true[^*]*\*\*', re.IGNORECASE),
+    re.compile(r'ตั้งค่า\s*ready_to_design\s*=\s*true[^\n]*', re.IGNORECASE),
+    re.compile(r'\*\*ตั้งค่า\s*ready_to_quote\s*=\s*true[^*]*\*\*', re.IGNORECASE),
+    re.compile(r'ตั้งค่า\s*ready_to_quote\s*=\s*true[^\n]*', re.IGNORECASE),
+    re.compile(r'\*\*ตั้งค่า\s*box_confirmed\s*=\s*true[^*]*\*\*', re.IGNORECASE),
+    re.compile(r'ready_to_design\s*=\s*true', re.IGNORECASE),
+    re.compile(r'ready_to_quote\s*=\s*true', re.IGNORECASE),
+    re.compile(r'box_confirmed\s*=\s*true', re.IGNORECASE),
+    re.compile(r'\[ข้อมูลที่เก็บได้:[^\]]*\]', re.IGNORECASE),
+]
+
 
 # ==================== AI CHAT CLASS ====================
 class AIChat:
@@ -186,6 +199,10 @@ class AIChat:
         
         # ลบ JSON block ขนาดใหญ่
         text = AIChat._remove_large_json_blocks(text)
+        
+        # ลบข้อความ internal ที่ไม่ควรแสดงลูกค้า
+        for pattern in INTERNAL_MESSAGE_PATTERNS:
+            text = pattern.sub('', text)
         
         # ลบบรรทัดว่างที่เกิน
         text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)

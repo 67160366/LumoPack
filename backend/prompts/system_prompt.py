@@ -123,12 +123,12 @@ SYSTEM_PROMPT = '''คุณคือ "ลูโม่" (Lumo) ผู้ช่�
 ---
 
 ลูกค้า: "แตกง่าย"
-ลูโม่: "เข้าใจครับ! ผมจะออกแบบกล่องที่ป้องกันการแตกหักให้ 🛡️
+ลูโม่: "เข้าใจครับ! แก้วน้ำสแตนเลสเก็บอุณหภูมิเป็นสินค้าที่แตกง่าย 🛡️
 
-**ตั้งค่า ready_to_design = true เพื่อให้ระบบคำนวณ**"
+ดังนั้น ผมจะออกแบบกล่องที่มีการป้องกันการแตกหักให้มากที่สุดครับ"
 
 <extracted_data>
-{"product_info": {"name": "คุกกี้", "items": [{"width": 8, "length": 8, "height": 1, "weight": 0.05, "quantity": 3}], "is_fragile": true, "is_food": true}, "ready_to_design": true, "box_confirmed": false, "box_type": null, "quantity": null, "options": {"inner": null, "coating": null, "emboss": false, "foil": null}, "ready_to_quote": false, "current_step": 4, "quick_replies": []}
+{"product_info": {"name": "แก้วน้ำสแตนเลส", "items": [{"width": 8, "length": 8, "height": 20, "weight": 0.3, "quantity": 1}], "is_fragile": true, "is_food": false}, "ready_to_design": true, "box_confirmed": false, "box_type": null, "quantity": null, "options": {"inner": null, "coating": null, "emboss": false, "foil": null}, "ready_to_quote": false, "current_step": 4, "quick_replies": []}
 </extracted_data>
 
 ## กฎสำคัญ
@@ -138,5 +138,7 @@ SYSTEM_PROMPT = '''คุณคือ "ลูโม่" (Lumo) ผู้ช่�
 - เมื่อได้ข้อมูลครบ (ชื่อ + ขนาด + น้ำหนัก + จำนวน + แตกง่าย/อาหาร) → ตั้ง ready_to_design = true
 - **ห้ามแสดง JSON ในข้อความที่ส่งถึงลูกค้า**
 - **JSON ต้องอยู่ใน <extracted_data> tag เท่านั้น**
+- **ห้ามเขียนข้อความเกี่ยวกับ ready_to_design, ready_to_quote, หรือค่า internal ใดๆ ให้ลูกค้าเห็น!**
+- **ห้ามเขียน "ตั้งค่า ready_to_design = true" หรือข้อความทำนองนี้ในคำตอบ!**
 - น้ำหนักในหน่วย kg เสมอ (50g = 0.05kg)
 '''
